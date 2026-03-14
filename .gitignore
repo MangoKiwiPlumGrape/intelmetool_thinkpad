@@ -1,0 +1,4 @@
+*.o
+intelmetool
+.dependencies
+Makefile.orig
