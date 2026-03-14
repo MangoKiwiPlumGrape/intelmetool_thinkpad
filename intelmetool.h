@@ -1,0 +1,746 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
+
+#define ME_NOT_PRESENT 0
+#define ME_FOUND_NOTHING 1
+#define ME_FOUND_SOMETHING_NOT_SURE 2
+#define ME_CAN_DISABLE_IF_PRESENT 3
+#define ME_PRESENT_CAN_DISABLE 4
+#define ME_PRESENT_CANNOT_DISABLE 5
+
+#define INTELMETOOL_VERSION "1.3"
+
+#define GPLV2COPYRIGHT \
+"This program is free software: you can redistribute it and/or modify\n" \
+"it under the terms of the GNU General Public License as published by\n" \
+"the Free Software Foundation, version 2 of the License.\n\n" \
+"This program is distributed in the hope that it will be useful,\n" \
+"but WITHOUT ANY WARRANTY; without even the implied warranty of\n" \
+"MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the\n" \
+"GNU General Public License for more details.\n\n"
+
+#if defined(__GLIBC__)
+#include <sys/io.h>
+#endif
+#if (defined(__MACH__) && defined(__APPLE__))
+/* DirectHW is available here: https://www.coreboot.org/DirectHW */
+#define __DARWIN__
+#include <DirectHW/DirectHW.h>
+#endif
+#ifdef __NetBSD__
+#include <pciutils/pci.h>
+#else
+#include <pci/pci.h>
+#endif
+
+#define CNRM  "\x1B[0m"
+#define CRED  "\x1B[31m"
+#define CGRN  "\x1B[32m"
+#define CYEL  "\x1B[33m"
+#define CBLU  "\x1B[34m"
+#define CMAG  "\x1B[35m"
+#define CCYN  "\x1B[36m"
+#define CWHT  "\x1B[37m"
+#define RESET "\033[0m"
+
+#define CPU_ID_SIZE 13
+#define FD2 0x3428
+#define ME_COMMAND_DELAY 10000
+#define ME_MESSAGE_LEN 256
+
+extern int debug;
+
+#define PCI_VENDOR_ID_INTEL 0x8086
+
+// Chipset does not have ME
+#define PCI_DEVICE_ID_INTEL_82810		0x7120
+#define PCI_DEVICE_ID_INTEL_82810_DC		0x7122
+#define PCI_DEVICE_ID_INTEL_82810E_DC		0x7124
+#define PCI_DEVICE_ID_INTEL_82830M		0x3575
+#define PCI_DEVICE_ID_INTEL_82845		0x1a30
+#define PCI_DEVICE_ID_INTEL_82865		0x2570
+#define PCI_DEVICE_ID_INTEL_82915		0x2580
+#define PCI_DEVICE_ID_INTEL_82945P		0x2770
+#define PCI_DEVICE_ID_INTEL_82945GM		0x27a0
+#define PCI_DEVICE_ID_INTEL_82945GSE		0x27ac
+#define PCI_DEVICE_ID_INTEL_82X58		0x3405
+#define PCI_DEVICE_ID_INTEL_ATOM_DXXX		0xa000
+#define PCI_DEVICE_ID_INTEL_I63XX		0x2670
+#define PCI_DEVICE_ID_INTEL_I5000X		0x25c0
+#define PCI_DEVICE_ID_INTEL_I5000Z		0x25d0
+#define PCI_DEVICE_ID_INTEL_I5000V		0x25d4
+#define PCI_DEVICE_ID_INTEL_I5000P		0x25d8
+#define PCI_DEVICE_ID_INTEL_82443LX		0x7180
+#define PCI_DEVICE_ID_INTEL_82443BX		0x7190
+#define PCI_DEVICE_ID_INTEL_82443BX_NO_AGP	0x7192
+#define PCI_DEVICE_ID_INTEL_82371XX		0x7110
+#define PCI_DEVICE_ID_INTEL_ICH			0x2410
+#define PCI_DEVICE_ID_INTEL_ICH0		0x2420
+#define PCI_DEVICE_ID_INTEL_ICH2		0x2440
+#define PCI_DEVICE_ID_INTEL_ICH4		0x24c0
+#define PCI_DEVICE_ID_INTEL_ICH4M		0x24cc
+#define PCI_DEVICE_ID_INTEL_ICH5		0x24d0
+#define PCI_DEVICE_ID_INTEL_ICH6		0x2640
+#define PCI_DEVICE_ID_INTEL_ICH7DH		0x27b0
+#define PCI_DEVICE_ID_INTEL_ICH7		0x27b8
+#define PCI_DEVICE_ID_INTEL_ICH7M		0x27b9
+#define PCI_DEVICE_ID_INTEL_ICH7MDH		0x27bd
+#define PCI_DEVICE_ID_INTEL_NM10		0x27bc
+
+#define PCI_DEV_NO_ME(x) ( \
+	((x) == PCI_DEVICE_ID_INTEL_82810) || \
+	((x) == PCI_DEVICE_ID_INTEL_82810_DC) || \
+	((x) == PCI_DEVICE_ID_INTEL_82810E_DC) || \
+	((x) == PCI_DEVICE_ID_INTEL_82830M) || \
+	((x) == PCI_DEVICE_ID_INTEL_82845) || \
+	((x) == PCI_DEVICE_ID_INTEL_82865) || \
+	((x) == PCI_DEVICE_ID_INTEL_82915) || \
+	((x) == PCI_DEVICE_ID_INTEL_82945P) || \
+	((x) == PCI_DEVICE_ID_INTEL_82945GM) || \
+	((x) == PCI_DEVICE_ID_INTEL_82945GSE) || \
+	((x) == PCI_DEVICE_ID_INTEL_82X58) || \
+	((x) == PCI_DEVICE_ID_INTEL_ATOM_DXXX) || \
+	((x) == PCI_DEVICE_ID_INTEL_I63XX) || \
+	((x) == PCI_DEVICE_ID_INTEL_I5000X) || \
+	((x) == PCI_DEVICE_ID_INTEL_I5000Z) || \
+	((x) == PCI_DEVICE_ID_INTEL_I5000V) || \
+	((x) == PCI_DEVICE_ID_INTEL_I5000P) || \
+	((x) == PCI_DEVICE_ID_INTEL_82443LX) || \
+	((x) == PCI_DEVICE_ID_INTEL_82443BX) || \
+	((x) == PCI_DEVICE_ID_INTEL_82443BX_NO_AGP) || \
+	((x) == PCI_DEVICE_ID_INTEL_82371XX) || \
+	((x) == PCI_DEVICE_ID_INTEL_ICH) || \
+	((x) == PCI_DEVICE_ID_INTEL_ICH0) || \
+	((x) == PCI_DEVICE_ID_INTEL_ICH2) || \
+	((x) == PCI_DEVICE_ID_INTEL_ICH4) || \
+	((x) == PCI_DEVICE_ID_INTEL_ICH4M) || \
+	((x) == PCI_DEVICE_ID_INTEL_ICH5) || \
+	((x) == PCI_DEVICE_ID_INTEL_ICH6) || \
+	((x) == PCI_DEVICE_ID_INTEL_ICH7DH) || \
+	((x) == PCI_DEVICE_ID_INTEL_ICH7) || \
+	((x) == PCI_DEVICE_ID_INTEL_ICH7M) || \
+	((x) == PCI_DEVICE_ID_INTEL_ICH7MDH) || \
+	((x) == PCI_DEVICE_ID_INTEL_NM10))
+
+// Definitely has ME and can be disabled
+#define PCI_DEVICE_ID_INTEL_ICH8ME		0x2811
+#define PCI_DEVICE_ID_INTEL_ICH9ME		0x2917
+#define PCI_DEVICE_ID_INTEL_ICH9M		0x2919
+
+#define PCI_DEV_HAS_ME_DISABLE(x) ( \
+	((x) == PCI_DEVICE_ID_INTEL_ICH8ME) || \
+	((x) == PCI_DEVICE_ID_INTEL_ICH9ME) || \
+	((x) == PCI_DEVICE_ID_INTEL_ICH9M))
+
+// Definitely has ME and is very difficult to remove
+#define PCI_DEVICE_ID_INTEL_ICH10R		0x3a16
+#define PCI_DEVICE_ID_INTEL_3400_DESKTOP	0x3b00
+#define PCI_DEVICE_ID_INTEL_3400_MOBILE		0x3b01
+#define PCI_DEVICE_ID_INTEL_P55			0x3b02
+#define PCI_DEVICE_ID_INTEL_PM55		0x3b03
+#define PCI_DEVICE_ID_INTEL_H55			0x3b06
+#define PCI_DEVICE_ID_INTEL_QM57		0x3b07
+#define PCI_DEVICE_ID_INTEL_H57			0x3b08
+#define PCI_DEVICE_ID_INTEL_HM55		0x3b09
+#define PCI_DEVICE_ID_INTEL_Q57			0x3b0a
+#define PCI_DEVICE_ID_INTEL_HM57		0x3b0b
+#define PCI_DEVICE_ID_INTEL_3400_MOBILE_SFF	0x3b0d
+#define PCI_DEVICE_ID_INTEL_B55_A		0x3b0e
+#define PCI_DEVICE_ID_INTEL_QS57		0x3b0f
+#define PCI_DEVICE_ID_INTEL_3400		0x3b12
+#define PCI_DEVICE_ID_INTEL_3420		0x3b14
+#define PCI_DEVICE_ID_INTEL_3450		0x3b16
+#define PCI_DEVICE_ID_INTEL_B55_B		0x3b1e
+#define PCI_DEVICE_ID_INTEL_Z68			0x1c44
+#define PCI_DEVICE_ID_INTEL_P67			0x1c46
+#define PCI_DEVICE_ID_INTEL_UM67		0x1c47
+#define PCI_DEVICE_ID_INTEL_HM65		0x1c49
+#define PCI_DEVICE_ID_INTEL_H67			0x1c4a
+#define PCI_DEVICE_ID_INTEL_HM67		0x1c4b
+#define PCI_DEVICE_ID_INTEL_Q65			0x1c4c
+#define PCI_DEVICE_ID_INTEL_QS67		0x1c4d
+#define PCI_DEVICE_ID_INTEL_Q67			0x1c4e
+#define PCI_DEVICE_ID_INTEL_QM67		0x1c4f
+#define PCI_DEVICE_ID_INTEL_B65			0x1c50
+#define PCI_DEVICE_ID_INTEL_C202		0x1c52
+#define PCI_DEVICE_ID_INTEL_C204		0x1c54
+#define PCI_DEVICE_ID_INTEL_C206		0x1c56
+#define PCI_DEVICE_ID_INTEL_H61			0x1c5c
+#define PCI_DEVICE_ID_INTEL_Z77			0x1e44
+#define PCI_DEVICE_ID_INTEL_Z75			0x1e46
+#define PCI_DEVICE_ID_INTEL_Q77			0x1e47
+#define PCI_DEVICE_ID_INTEL_Q75			0x1e48
+#define PCI_DEVICE_ID_INTEL_B75			0x1e49
+#define PCI_DEVICE_ID_INTEL_H77			0x1e4a
+#define PCI_DEVICE_ID_INTEL_C216		0x1e53
+#define PCI_DEVICE_ID_INTEL_QM77		0x1e55
+#define PCI_DEVICE_ID_INTEL_QS77		0x1e56
+#define PCI_DEVICE_ID_INTEL_HM77		0x1e57
+#define PCI_DEVICE_ID_INTEL_UM77		0x1e58
+#define PCI_DEVICE_ID_INTEL_HM76		0x1e59
+#define PCI_DEVICE_ID_INTEL_HM75		0x1e5d
+#define PCI_DEVICE_ID_INTEL_HM70		0x1e5e
+#define PCI_DEVICE_ID_INTEL_NM70		0x1e5f
+#define PCI_DEVICE_ID_INTEL_DH89XXCC		0x2310
+#define PCI_DEVICE_ID_INTEL_LYNXPOINT_LP_FULL	0x9c41
+#define PCI_DEVICE_ID_INTEL_LYNXPOINT_LP_PREM	0x9c43
+#define PCI_DEVICE_ID_INTEL_LYNXPOINT_LP_BASE	0x9c45
+#define PCI_DEVICE_ID_INTEL_H81			0x8c5c
+#define PCI_DEVICE_ID_INTEL_B85			0x8c50
+#define PCI_DEVICE_ID_INTEL_Q85			0x8c4c
+#define PCI_DEVICE_ID_INTEL_Q87			0x8c4e
+#define PCI_DEVICE_ID_INTEL_QM87		0x8c4f
+#define PCI_DEVICE_ID_INTEL_H87			0x8c4a
+#define PCI_DEVICE_ID_INTEL_HM87		0x8c4b
+#define PCI_DEVICE_ID_INTEL_Z87			0x8c44
+#define PCI_DEVICE_ID_INTEL_X99			0x8d47
+#define PCI_DEVICE_ID_INTEL_WILDCAT_LP1		0x9cc1
+#define PCI_DEVICE_ID_INTEL_WILDCAT_LP2		0x9cc2
+#define PCI_DEVICE_ID_INTEL_WILDCAT_LP3		0x9cc3
+#define PCI_DEVICE_ID_INTEL_WILDCAT_LP4		0x9cc5
+#define PCI_DEVICE_ID_INTEL_WILDCAT_LP5		0x9cc6
+#define PCI_DEVICE_ID_INTEL_WILDCAT_LP6		0x9cc7
+#define PCI_DEVICE_ID_INTEL_WILDCAT_LP7		0x9cc9
+#define PCI_DEVICE_ID_INTEL_SUNRISE_LP1		0x9d43
+#define PCI_DEVICE_ID_INTEL_SUNRISE_LP2		0x9d48
+#define PCI_DEVICE_ID_INTEL_SUNRISE_LP3		0x9d4e
+#define PCI_DEVICE_ID_INTEL_SUNRISE_LP4		0x9d56
+#define PCI_DEVICE_ID_INTEL_SUNRISE_LP5		0x9d58
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H0		0xa140
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H1		0xa141
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H2		0xa142
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H3		0xa143
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H4		0xa144
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H5		0xa145
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H6		0xa146
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H7		0xa147
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H8		0xa148
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H9		0xa149
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H10		0xa14a
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H11		0xa14b
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H12		0xa14c
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H13		0xa14d
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H14		0xa14e
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H15		0xa14f
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H16		0xa150
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H17		0xa151
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H18		0xa152
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H19		0xa153
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H20		0xa154
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H21		0xa155
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H22		0xa156
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H23		0xa157
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H24		0xa158
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H25		0xa159
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H26		0xa15a
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H27		0xa15b
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H28		0xa15c
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H29		0xa15d
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H30		0xa15e
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H31		0xa15f
+#define PCI_DEVICE_ID_INTEL_LEWISBURG_1		0xa1c1
+#define PCI_DEVICE_ID_INTEL_LEWISBURG_2		0xa1c2
+#define PCI_DEVICE_ID_INTEL_LEWISBURG_3		0xa1c3
+#define PCI_DEVICE_ID_INTEL_LEWISBURG_4		0xa1c4
+#define PCI_DEVICE_ID_INTEL_LEWISBURG_5		0xa1c5
+#define PCI_DEVICE_ID_INTEL_LEWISBURG_6		0xa1c6
+#define PCI_DEVICE_ID_INTEL_LEWISBURG_7		0xa1c7
+#define PCI_DEVICE_ID_INTEL_UNIONPOINT_H270	0xa2c4
+#define PCI_DEVICE_ID_INTEL_UNIONPOINT_Z270	0xa2c5
+#define PCI_DEVICE_ID_INTEL_UNIONPOINT_Q270	0xa2c6
+#define PCI_DEVICE_ID_INTEL_UNIONPOINT_Q250	0xa2c7
+#define PCI_DEVICE_ID_INTEL_UNIONPOINT_B250	0xa2c8
+#define PCI_DEVICE_ID_INTEL_UNIONPOINT_Z370	0xa2c9
+#define PCI_DEVICE_ID_INTEL_UNIONPOINT_H310C	0xa2ca
+#define PCI_DEVICE_ID_INTEL_UNIONPOINT_X299	0xa2d2
+/*
+ * Cannon Point (CNL, 8th/9th gen LP) PCH IDs — missing from upstream.
+ * Without these, pci_platform_scan() falls through to "ME not present"
+ * and returns early before querying ME status.
+ */
+#define PCI_DEVICE_ID_INTEL_CANNONPOINT_LP_1	0x9d83 /* CNL-LP (300-series) */
+#define PCI_DEVICE_ID_INTEL_CANNONPOINT_LP_2	0x9d84 /* CNL-LP variant 2 */
+#define PCI_DEVICE_ID_INTEL_CANNONPOINT_LP_3	0x9da8 /* CNL-LP variant 3 */
+/*
+ * Tiger Lake (TGL, 11th gen) PCH eSPI controller IDs.
+ * Source: Linux kernel arch/x86/include/asm/intel-family.h + coreboot
+ */
+#define PCI_DEVICE_ID_INTEL_TIGERLAKE_LP_ESPI	0xa082 /* TGL-LP PCH (range 0xa082-0xa09f) */
+#define PCI_DEVICE_ID_INTEL_TIGERLAKE_H_ESPI	0x4381 /* TGL-H PCH */
+/*
+ * Alder Lake (ADL, 12th gen, Intel 600-series) PCH eSPI controller IDs.
+ * Source: Intel 600-series PCH Datasheet Vol1 (Doc 648364), Device ID table,
+ * D31:F0 — eSPI Controller, range 0x7A80-0x7A9F. Named SKU IDs listed explicitly.
+ */
+#define PCI_DEVICE_ID_INTEL_ALDERLAKE_S_Z690	0x7a84 /* ADL-S Z690 */
+#define PCI_DEVICE_ID_INTEL_ALDERLAKE_S_H670	0x7a85 /* ADL-S H670 */
+#define PCI_DEVICE_ID_INTEL_ALDERLAKE_S_B660	0x7a86 /* ADL-S B660 */
+#define PCI_DEVICE_ID_INTEL_ALDERLAKE_S_H610	0x7a87 /* ADL-S H610 */
+#define PCI_DEVICE_ID_INTEL_ALDERLAKE_S_W680	0x7a88 /* ADL-S W680 */
+#define PCI_DEVICE_ID_INTEL_ALDERLAKE_S_Q670	0x7a83 /* ADL-S Q670 */
+#define PCI_DEVICE_ID_INTEL_ALDERLAKE_M_HM670	0x7a8c /* ADL mobile HM670 */
+#define PCI_DEVICE_ID_INTEL_ALDERLAKE_M_WM690	0x7a8d /* ADL mobile WM690 */
+#define PCI_DEVICE_ID_INTEL_ALDERLAKE_P_ESPI	0x5182 /* ADL-P PCH (mobile, 12th gen) */
+#define PCI_DEVICE_ID_INTEL_ALDERLAKE_N_ESPI	0x5430 /* ADL-N PCH (N100/N200) */
+/*
+ * Raptor Lake (RPL, 13th gen, Intel 700-series) PCH eSPI controller IDs.
+ * Source: Linux kernel + coreboot soc/intel/raptorlake
+ */
+#define PCI_DEVICE_ID_INTEL_RAPTERLAKE_S_ESPI	0x7a04 /* RPL-S PCH (700-series desktop) */
+#define PCI_DEVICE_ID_INTEL_RAPTERLAKE_P_ESPI	0x5182 /* RPL-P shares ADL-P PCH ID */
+/*
+ * Meteor Lake (MTL, 14th gen) PCH eSPI controller IDs.
+ * Source: Linux kernel + coreboot soc/intel/meteorlake
+ */
+#define PCI_DEVICE_ID_INTEL_METEORLAKE_P_ESPI	0x7e02 /* MTL-P PCH */
+/*
+ * Ice Lake (ICL, 10th gen LP) PCH IDs — completely missing from upstream.
+ */
+#define PCI_DEVICE_ID_INTEL_ICELAKE_LP_1	0x3482 /* ICL-LP (400-series) */
+#define PCI_DEVICE_ID_INTEL_ICELAKE_LP_2	0x3484 /* ICL-LP variant 2 */
+#define PCI_DEVICE_ID_INTEL_ICELAKE_LP_3	0x3488 /* ICL-LP variant 3 */
+/*
+ * Comet Lake (CML, 10th gen LP/H) PCH IDs — upstream only has 0x02e0.
+ * Multiple MEI device IDs exist across CML SKUs.
+ */
+#define PCI_DEVICE_ID_INTEL_COMETLAKE_LP_2	0x02e8 /* CML-U MEI2 */
+#define PCI_DEVICE_ID_INTEL_COMETLAKE_H_1	0x06e0 /* CML-H MEI1 */
+#define PCI_DEVICE_ID_INTEL_COMETLAKE_H_2	0x06e8 /* CML-H MEI2 */
+#define PCI_DEVICE_ID_INTEL_COMETLAKE_S_1	0xa3b0 /* CML-S MEI1 (400-series H) */
+#define PCI_DEVICE_ID_INTEL_COMETLAKE_S_2	0xa3ba /* CML-S MEI2 */
+
+#define PCI_DEV_HAS_ME_DIFFICULT(x) ( \
+	((x) == PCI_DEVICE_ID_INTEL_ICH10R) || \
+	((x) == PCI_DEVICE_ID_INTEL_3400_DESKTOP) || \
+	((x) == PCI_DEVICE_ID_INTEL_3400_MOBILE) || \
+	((x) == PCI_DEVICE_ID_INTEL_P55) || \
+	((x) == PCI_DEVICE_ID_INTEL_PM55) || \
+	((x) == PCI_DEVICE_ID_INTEL_H55) || \
+	((x) == PCI_DEVICE_ID_INTEL_QM57) || \
+	((x) == PCI_DEVICE_ID_INTEL_H57) || \
+	((x) == PCI_DEVICE_ID_INTEL_HM55) || \
+	((x) == PCI_DEVICE_ID_INTEL_Q57) || \
+	((x) == PCI_DEVICE_ID_INTEL_HM57) || \
+	((x) == PCI_DEVICE_ID_INTEL_3400_MOBILE_SFF) || \
+	((x) == PCI_DEVICE_ID_INTEL_B55_A) || \
+	((x) == PCI_DEVICE_ID_INTEL_QS57) || \
+	((x) == PCI_DEVICE_ID_INTEL_3400) || \
+	((x) == PCI_DEVICE_ID_INTEL_3420) || \
+	((x) == PCI_DEVICE_ID_INTEL_3450) || \
+	((x) == PCI_DEVICE_ID_INTEL_B55_B) || \
+	((x) == PCI_DEVICE_ID_INTEL_Z68) || \
+	((x) == PCI_DEVICE_ID_INTEL_P67) || \
+	((x) == PCI_DEVICE_ID_INTEL_UM67) || \
+	((x) == PCI_DEVICE_ID_INTEL_HM65) || \
+	((x) == PCI_DEVICE_ID_INTEL_H67) || \
+	((x) == PCI_DEVICE_ID_INTEL_HM67) || \
+	((x) == PCI_DEVICE_ID_INTEL_Q65) || \
+	((x) == PCI_DEVICE_ID_INTEL_QS67) || \
+	((x) == PCI_DEVICE_ID_INTEL_Q67) || \
+	((x) == PCI_DEVICE_ID_INTEL_QM67) || \
+	((x) == PCI_DEVICE_ID_INTEL_B65) || \
+	((x) == PCI_DEVICE_ID_INTEL_C202) || \
+	((x) == PCI_DEVICE_ID_INTEL_C204) || \
+	((x) == PCI_DEVICE_ID_INTEL_C206) || \
+	((x) == PCI_DEVICE_ID_INTEL_H61) || \
+	((x) == PCI_DEVICE_ID_INTEL_Z77) || \
+	((x) == PCI_DEVICE_ID_INTEL_Z75) || \
+	((x) == PCI_DEVICE_ID_INTEL_Q77) || \
+	((x) == PCI_DEVICE_ID_INTEL_Q75) || \
+	((x) == PCI_DEVICE_ID_INTEL_B75) || \
+	((x) == PCI_DEVICE_ID_INTEL_H77) || \
+	((x) == PCI_DEVICE_ID_INTEL_C216) || \
+	((x) == PCI_DEVICE_ID_INTEL_QM77) || \
+	((x) == PCI_DEVICE_ID_INTEL_QS77) || \
+	((x) == PCI_DEVICE_ID_INTEL_HM77) || \
+	((x) == PCI_DEVICE_ID_INTEL_UM77) || \
+	((x) == PCI_DEVICE_ID_INTEL_HM76) || \
+	((x) == PCI_DEVICE_ID_INTEL_HM75) || \
+	((x) == PCI_DEVICE_ID_INTEL_HM70) || \
+	((x) == PCI_DEVICE_ID_INTEL_NM70) || \
+	((x) == PCI_DEVICE_ID_INTEL_DH89XXCC) || \
+	((x) == PCI_DEVICE_ID_INTEL_LYNXPOINT_LP_FULL) || \
+	((x) == PCI_DEVICE_ID_INTEL_LYNXPOINT_LP_PREM) || \
+	((x) == PCI_DEVICE_ID_INTEL_LYNXPOINT_LP_BASE) || \
+	((x) == PCI_DEVICE_ID_INTEL_H81) || \
+	((x) == PCI_DEVICE_ID_INTEL_B85) || \
+	((x) == PCI_DEVICE_ID_INTEL_Q85) || \
+	((x) == PCI_DEVICE_ID_INTEL_Q87) || \
+	((x) == PCI_DEVICE_ID_INTEL_QM87) || \
+	((x) == PCI_DEVICE_ID_INTEL_H87) || \
+	((x) == PCI_DEVICE_ID_INTEL_HM87) || \
+	((x) == PCI_DEVICE_ID_INTEL_Z87) || \
+	((x) == PCI_DEVICE_ID_INTEL_X99) || \
+	((x) == PCI_DEVICE_ID_INTEL_WILDCAT_LP1) || \
+	((x) == PCI_DEVICE_ID_INTEL_WILDCAT_LP2) || \
+	((x) == PCI_DEVICE_ID_INTEL_WILDCAT_LP3) || \
+	((x) == PCI_DEVICE_ID_INTEL_WILDCAT_LP4) || \
+	((x) == PCI_DEVICE_ID_INTEL_WILDCAT_LP5) || \
+	((x) == PCI_DEVICE_ID_INTEL_WILDCAT_LP6) || \
+	((x) == PCI_DEVICE_ID_INTEL_WILDCAT_LP7) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_LP1) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_LP2) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_LP3) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_LP4) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_LP5) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H0) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H1) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H2) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H3) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H4) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H5) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H6) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H7) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H8) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H9) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H10) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H11) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H12) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H13) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H14) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H15) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H16) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H17) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H18) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H19) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H20) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H21) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H22) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H23) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H24) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H25) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H26) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H27) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H28) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H29) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H30) || \
+	((x) == PCI_DEVICE_ID_INTEL_SUNRISE_H31) || \
+	((x) == PCI_DEVICE_ID_INTEL_LEWISBURG_1) || \
+	((x) == PCI_DEVICE_ID_INTEL_LEWISBURG_2) || \
+	((x) == PCI_DEVICE_ID_INTEL_LEWISBURG_3) || \
+	((x) == PCI_DEVICE_ID_INTEL_LEWISBURG_4) || \
+	((x) == PCI_DEVICE_ID_INTEL_LEWISBURG_5) || \
+	((x) == PCI_DEVICE_ID_INTEL_LEWISBURG_6) || \
+	((x) == PCI_DEVICE_ID_INTEL_LEWISBURG_7) || \
+	((x) == PCI_DEVICE_ID_INTEL_UNIONPOINT_H270) || \
+	((x) == PCI_DEVICE_ID_INTEL_UNIONPOINT_Z270) || \
+	((x) == PCI_DEVICE_ID_INTEL_UNIONPOINT_Q270) || \
+	((x) == PCI_DEVICE_ID_INTEL_UNIONPOINT_Q250) || \
+	((x) == PCI_DEVICE_ID_INTEL_UNIONPOINT_B250) || \
+	((x) == PCI_DEVICE_ID_INTEL_UNIONPOINT_Z370) || \
+	((x) == PCI_DEVICE_ID_INTEL_UNIONPOINT_H310C) || \
+	((x) == PCI_DEVICE_ID_INTEL_UNIONPOINT_X299) || \
+	/* Cannon Point (CNL, 8th/9th gen LP) — added, missing from upstream */ \
+	((x) == PCI_DEVICE_ID_INTEL_CANNONPOINT_LP_1) || \
+	((x) == PCI_DEVICE_ID_INTEL_CANNONPOINT_LP_2) || \
+	((x) == PCI_DEVICE_ID_INTEL_CANNONPOINT_LP_3) || \
+	/* Ice Lake (ICL, 10th gen LP) — added, completely absent from upstream */ \
+	((x) == PCI_DEVICE_ID_INTEL_ICELAKE_LP_1) || \
+	((x) == PCI_DEVICE_ID_INTEL_ICELAKE_LP_2) || \
+	((x) == PCI_DEVICE_ID_INTEL_ICELAKE_LP_3) || \
+	/* Comet Lake (CML, 10th gen LP/H) — upstream only had 0x02e0, added rest */ \
+	((x) == PCI_DEVICE_ID_INTEL_COMETLAKE_LP_2) || \
+	((x) == PCI_DEVICE_ID_INTEL_COMETLAKE_H_1) || \
+	((x) == PCI_DEVICE_ID_INTEL_COMETLAKE_H_2) || \
+	((x) == PCI_DEVICE_ID_INTEL_COMETLAKE_S_1) || \
+	((x) == PCI_DEVICE_ID_INTEL_COMETLAKE_S_2) || \
+	/* Tiger Lake (TGL, 11th gen) — added */ \
+	((x) == PCI_DEVICE_ID_INTEL_TIGERLAKE_LP_ESPI) || \
+	((x) == PCI_DEVICE_ID_INTEL_TIGERLAKE_H_ESPI) || \
+	/* Alder Lake (ADL, 12th gen, 600-series) — added, confirmed from Intel datasheet */ \
+	((x) == PCI_DEVICE_ID_INTEL_ALDERLAKE_S_Z690) || \
+	((x) == PCI_DEVICE_ID_INTEL_ALDERLAKE_S_H670) || \
+	((x) == PCI_DEVICE_ID_INTEL_ALDERLAKE_S_B660) || \
+	((x) == PCI_DEVICE_ID_INTEL_ALDERLAKE_S_H610) || \
+	((x) == PCI_DEVICE_ID_INTEL_ALDERLAKE_S_W680) || \
+	((x) == PCI_DEVICE_ID_INTEL_ALDERLAKE_S_Q670) || \
+	((x) == PCI_DEVICE_ID_INTEL_ALDERLAKE_M_HM670) || \
+	((x) == PCI_DEVICE_ID_INTEL_ALDERLAKE_M_WM690) || \
+	((x) == PCI_DEVICE_ID_INTEL_ALDERLAKE_P_ESPI) || \
+	((x) == PCI_DEVICE_ID_INTEL_ALDERLAKE_N_ESPI) || \
+	/* Raptor Lake (RPL, 13th gen, 700-series) — added */ \
+	((x) == PCI_DEVICE_ID_INTEL_RAPTERLAKE_S_ESPI) || \
+	((x) == PCI_DEVICE_ID_INTEL_RAPTERLAKE_P_ESPI) || \
+	/* Meteor Lake (MTL, 14th gen) — added */ \
+	((x) == PCI_DEVICE_ID_INTEL_METEORLAKE_P_ESPI) || \
+	0)
+
+// Not sure if ME present, but should be able to disable it easily
+#define PCI_DEVICE_ID_INTEL_ICH8		0x2810
+#define PCI_DEVICE_ID_INTEL_ICH8M		0x2815
+#define PCI_DEVICE_ID_INTEL_ICH9DH		0x2912
+#define PCI_DEVICE_ID_INTEL_ICH9DO		0x2914
+#define PCI_DEVICE_ID_INTEL_ICH9R		0x2916
+#define PCI_DEVICE_ID_INTEL_ICH9		0x2918
+
+#define PCI_DEV_CAN_DISABLE_ME_IF_PRESENT(x) ( \
+	((x) == PCI_DEVICE_ID_INTEL_ICH8) || \
+	((x) == PCI_DEVICE_ID_INTEL_ICH8M) || \
+	((x) == PCI_DEVICE_ID_INTEL_ICH9DH) || \
+	((x) == PCI_DEVICE_ID_INTEL_ICH9DO) || \
+	((x) == PCI_DEVICE_ID_INTEL_ICH9R) || \
+	((x) == PCI_DEVICE_ID_INTEL_ICH9))
+
+// Not sure at all
+#define PCI_DEVICE_ID_INTEL_SCH_POULSBO_LPC	0x8119
+#define PCI_DEVICE_ID_INTEL_SCH_POULSBO		0x8100
+
+#define PCI_DEV_ME_NOT_SURE(x) ( \
+	((x) == PCI_DEVICE_ID_INTEL_SCH_POULSBO_LPC) || \
+	((x) == PCI_DEVICE_ID_INTEL_SCH_POULSBO))
+
+// ME PCI IDs (HECI)
+#define PCI_DEVICE_ID_INTEL_COUGARPOINT_1	0x1C3A /* Cougar Point */
+#define PCI_DEVICE_ID_INTEL_PATSBURG_1		0x1D3A /* C600/X79 Patsburg */
+#define PCI_DEVICE_ID_INTEL_PANTHERPOINT_1	0x1CBA /* Panther Point */
+#define PCI_DEVICE_ID_INTEL_PANTHERPOINT_2	0x1DBA /* Panther Point */
+#define PCI_DEVICE_ID_INTEL_PANTHERPOINT_3	0x1E3A /* Panther Point */
+#define PCI_DEVICE_ID_INTEL_CAVECREEK		0x2364 /* Cave Creek */
+#define PCI_DEVICE_ID_INTEL_BEARLAKE_1		0x28B4 /* Bearlake */
+#define PCI_DEVICE_ID_INTEL_BEARLAKE_2		0x28C4 /* Bearlake */
+#define PCI_DEVICE_ID_INTEL_BEARLAKE_3		0x28D4 /* Bearlake */
+#define PCI_DEVICE_ID_INTEL_BEARLAKE_4		0x28E4 /* Bearlake */
+#define PCI_DEVICE_ID_INTEL_BEARLAKE_5		0x28F4 /* Bearlake */
+#define PCI_DEVICE_ID_INTEL_82946GZ		0x2974 /* 82946GZ/GL */
+#define PCI_DEVICE_ID_INTEL_82G35		0x2984 /* 82G35 Express */
+#define PCI_DEVICE_ID_INTEL_82Q963		0x2994 /* 82Q963/Q965 */
+#define PCI_DEVICE_ID_INTEL_82P965		0x29A4 /* 82P965/G965 */
+#define PCI_DEVICE_ID_INTEL_82Q35		0x29B4 /* 82Q35 Express */
+#define PCI_DEVICE_ID_INTEL_82G33		0x29C4 /* 82G33/G31/P35/P31 Express */
+#define PCI_DEVICE_ID_INTEL_82Q33		0x29D4 /* 82Q33 Express */
+#define PCI_DEVICE_ID_INTEL_82X38		0x29E4 /* 82X38/X48 Express */
+#define PCI_DEVICE_ID_INTEL_3200		0x29F4 /* 3200/3210 Server */
+#define PCI_DEVICE_ID_INTEL_PM965		0x2A04 /* Mobile PM965/GM965 */
+#define PCI_DEVICE_ID_INTEL_GME965		0x2A14 /* Mobile GME965/GLE960 */
+#define PCI_DEVICE_ID_INTEL_CANTIGA_1		0x2A44 /* Cantiga */
+#define PCI_DEVICE_ID_INTEL_CANTIGA_2		0x2a50 /* Cantiga */
+#define PCI_DEVICE_ID_INTEL_CANTIGA_3		0x2A54 /* Cantiga */
+#define PCI_DEVICE_ID_INTEL_CANTIGA_4		0x2A64 /* Cantiga */
+#define PCI_DEVICE_ID_INTEL_CANTIGA_5		0x2A74 /* Cantiga */
+#define PCI_DEVICE_ID_INTEL_EAGLELAKE_1		0x2E04 /* Eaglelake */
+#define PCI_DEVICE_ID_INTEL_EAGLELAKE_2		0x2E14 /* Eaglelake */
+#define PCI_DEVICE_ID_INTEL_EAGLELAKE_3		0x2E24 /* Eaglelake */
+#define PCI_DEVICE_ID_INTEL_EAGLELAKE_4		0x2E34 /* Eaglelake */
+#define PCI_DEVICE_ID_INTEL_CALPELLA_1		0x3B64 /* Calpella */
+#define PCI_DEVICE_ID_INTEL_CALPELLA_2		0x3B65 /* Calpella */
+#define PCI_DEVICE_ID_INTEL_LYNXPOINT_1		0x8C3A /* Lynx Point H */
+#define PCI_DEVICE_ID_INTEL_LYNXPOINT_2		0x8CBA /* Lynx Point H Refresh */
+#define PCI_DEVICE_ID_INTEL_LYNXPOINT_3		0x8D3A /* Lynx Point - Wellsburg */
+#define PCI_DEVICE_ID_INTEL_LYNXPOINT_4		0x9C3A /* Lynx Point LP */
+#define PCI_DEVICE_ID_INTEL_WILDCAT_1		0x9CBA /* Wildcat Point LP */
+#define PCI_DEVICE_ID_INTEL_WILDCAT_2		0x9CBB /* Wildcat Point LP 2 */
+#define PCI_DEVICE_ID_INTEL_SUNRISE_LP		0x9d3a /* Sunrise Point-LP */
+#define PCI_DEVICE_ID_INTEL_CANNONPOINT_LP	0x9de0 /* Cannon Point-LP MEI1 (8th/9th gen) */
+#define PCI_DEVICE_ID_INTEL_CANNONPOINT_LP_ME2	0x9de8 /* Cannon Point-LP MEI2 */
+#define PCI_DEVICE_ID_INTEL_COMETPOINT_LP	0x02e0 /* Comet Point-LP MEI1 (CML-U) */
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H1_ME	0xa13a /* Sunrise Point-H MEI1 */
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H2_ME	0xa13b /* Sunrise Point-H MEI2 */
+#define PCI_DEVICE_ID_INTEL_SUNRISE_H3_ME	0xA13E /* Sunrise Point-H MEI3 */
+#define PCI_DEVICE_ID_INTEL_LEWISBURG_CSME1	0xA1BA /* CSME Lewisburg #1 */
+#define PCI_DEVICE_ID_INTEL_LEWISBURG_CSME2	0xA1BB /* CSME Lewisburg #2 */
+#define PCI_DEVICE_ID_INTEL_LEWISBURG_CSME3	0xA1BE /* CSME Lewisburg #3 */
+#define PCI_DEVICE_ID_INTEL_LEWISBURG_IE1	0xA1F8 /* IE Lewisburg #1 */
+#define PCI_DEVICE_ID_INTEL_LEWISBURG_IE2	0xA1F9 /* IE Lewisburg #2 */
+#define PCI_DEVICE_ID_INTEL_LEWISBURG_IE3	0xA1FC /* IE Lewisburg #3 */
+#define PCI_DEVICE_ID_INTEL_CANNONLAKE		0xA360 /* Cannon Lake H MEI1 */
+#define PCI_DEVICE_ID_INTEL_BAYTRAIL		0x0F18 /* Bay Trail */
+#define PCI_DEVICE_ID_INTEL_UNIONPOINT_MEI1	0xA2BA /* Union Point MEI1 */
+#define PCI_DEVICE_ID_INTEL_UNIONPOINT_MEI2	0xA2BB /* Union Point MEI2 */
+#define PCI_DEVICE_ID_INTEL_UNIONPOINT_MEI3	0xA2BE /* Union Point MEI3 */
+/* Ice Lake MEI device IDs — completely absent from upstream */
+#define PCI_DEVICE_ID_INTEL_ICELAKE_LP_MEI1	0x34e0 /* Ice Lake-LP MEI1 (10th gen) */
+#define PCI_DEVICE_ID_INTEL_ICELAKE_LP_MEI2	0x34e8 /* Ice Lake-LP MEI2 */
+/* Comet Lake additional MEI device IDs — upstream only had 0x02e0 */
+#define PCI_DEVICE_ID_INTEL_COMETLAKE_U_MEI2	0x02e8 /* CML-U MEI2 */
+#define PCI_DEVICE_ID_INTEL_COMETLAKE_H_MEI1	0x06e0 /* CML-H MEI1 */
+#define PCI_DEVICE_ID_INTEL_COMETLAKE_H_MEI2	0x06e8 /* CML-H MEI2 */
+#define PCI_DEVICE_ID_INTEL_COMETLAKE_S_MEI1	0xa3b0 /* CML-S MEI1 (400-series H) */
+#define PCI_DEVICE_ID_INTEL_COMETLAKE_S_MEI2	0xa3ba /* CML-S MEI2 */
+/*
+ * Tiger Lake (TGL, 11th gen, ME 15) MEI device IDs.
+ * Source: Linux kernel drivers/misc/mei/hw-me-regs.h
+ */
+#define PCI_DEVICE_ID_INTEL_TIGERLAKE_LP_MEI1	0xa0e0 /* TGL-LP MEI1 */
+#define PCI_DEVICE_ID_INTEL_TIGERLAKE_LP_MEI2	0xa0e8 /* TGL-LP MEI2 */
+#define PCI_DEVICE_ID_INTEL_TIGERLAKE_H_MEI1	0x43e0 /* TGL-H MEI1 */
+#define PCI_DEVICE_ID_INTEL_TIGERLAKE_H_MEI2	0x43e8 /* TGL-H MEI2 */
+/*
+ * Alder Lake (ADL, 12th gen, ME 16, Intel 600-series PCH) MEI device IDs.
+ * ADL-S: HECI1=0x7AE8, HECI2=0x7AE9 per Intel 600-series PCH Datasheet Vol1
+ * (Doc 648364) D22:F0/F1. NOTE: 0x7AEA is IDE-R (D22:F2), NOT HECI1/2.
+ * Confirmed independently by coreboot ADP_S_CSE0=0x7ae8.
+ * ADL-P (mobile) and ADL-N (N100/N200) use separate ID ranges.
+ * Source: Intel 600-series PCH Datasheet Vol1 Doc 648364 + coreboot pci_ids.h
+ */
+#define PCI_DEVICE_ID_INTEL_ALDERLAKE_S_MEI1	0x7ae8 /* ADL-S HECI1 (D22:F0) */
+#define PCI_DEVICE_ID_INTEL_ALDERLAKE_S_MEI2	0x7ae9 /* ADL-S HECI2 (D22:F1) */
+#define PCI_DEVICE_ID_INTEL_ALDERLAKE_P_MEI1	0x51e0 /* ADL-P MEI1 (mobile) */
+#define PCI_DEVICE_ID_INTEL_ALDERLAKE_P_MEI2	0x51e8 /* ADL-P MEI2 (mobile) */
+#define PCI_DEVICE_ID_INTEL_ALDERLAKE_N_MEI1	0x54e0 /* ADL-N MEI1 (N100/N200) */
+#define PCI_DEVICE_ID_INTEL_ALDERLAKE_N_MEI2	0x54e8 /* ADL-N MEI2 (N100/N200) */
+/*
+ * Raptor Lake (RPL, 13th gen, ME 16.1, Intel 700-series PCH) MEI device IDs.
+ * RPL-S: HECI1=0x7A68, HECI2=0x7A69 per Intel 700-series PCH Datasheet Vol1
+ * (Doc 743835) D22:F0/F1. Confirmed by coreboot RPP_S_CSE0=0x7a68.
+ * NOTE: 0x7A60/0x7A61 are a different RPL-S SKU variant (also in datasheet).
+ * RPL-P/U share 0x51E0 with ADL-P.
+ * Source: Intel 700-series PCH Datasheet Vol1 Doc 743835 + coreboot pci_ids.h
+ */
+#define PCI_DEVICE_ID_INTEL_RAPTERLAKE_S_MEI1	0x7a68 /* RPL-S HECI1 (D22:F0) */
+#define PCI_DEVICE_ID_INTEL_RAPTERLAKE_S_MEI2	0x7a69 /* RPL-S HECI2 (D22:F1) */
+/* RPL-P MEI1 shares PCI_DEVICE_ID_INTEL_ALDERLAKE_P_MEI1 (0x51e0) */
+/*
+ * Meteor Lake (MTL, 14th gen, ME 18) MEI device IDs.
+ * Confirmed from Intel Core Ultra Processor Datasheet Vol1 (Doc 792044)
+ * D22:F0/F1/F4. NOTE: MTL has no discrete PCH — tile architecture.
+ * WARNING: MTL flash descriptor layout differs from ADL/RPL. No PCH Straps
+ * at 0x100. HAP likely in IOE Soft Straps at 0xCAC — not yet empirically
+ * confirmed. Do not assume gen 7 HAP path works on MTL.
+ * Source: Intel Core Ultra CPU Datasheet Doc 792044 + coreboot pci_ids.h
+ */
+#define PCI_DEVICE_ID_INTEL_METEORLAKE_P_MEI1	0x7e70 /* MTL-P HECI1 (D22:F0) */
+#define PCI_DEVICE_ID_INTEL_METEORLAKE_P_MEI2	0x7e71 /* MTL-P HECI2 (D22:F1) */
+#define PCI_DEVICE_ID_INTEL_METEORLAKE_P_MEI3	0x7e74 /* MTL-P HECI3 (D22:F4) */
+/*
+ * Arrow Lake (ARL, 15th gen) MEI device IDs.
+ * ARL-H/U: Doc 842704 (Intel Core Ultra 200H/U Series DS, Rev 002, May 2025)
+ *   D22:F0-F5 layout confirmed. 0x7770 (HECI1) was coreboot-only; now datasheet confirmed.
+ *   D24 block (0x7758-775A) is the ARL-H discrete tile variant.
+ * ARL-S: Source: coreboot include/device/pci_ids.h (no ARL-S PCH datasheet available)
+ */
+#define PCI_DEVICE_ID_INTEL_ARROWLAKE_MEI1	0x7770 /* ARL-H/U HECI1 (D22:F0) — Doc 842704 */
+#define PCI_DEVICE_ID_INTEL_ARROWLAKE_MEI2	0x7771 /* ARL-H/U HECI2 (D22:F1) — Doc 842704 */
+#define PCI_DEVICE_ID_INTEL_ARROWLAKE_MEI3	0x7774 /* ARL-H/U HECI3 (D22:F4) — Doc 842704 */
+#define PCI_DEVICE_ID_INTEL_ARROWLAKE_MEI4	0x7775 /* ARL-H/U HECI4 (D22:F5) — Doc 842704 */
+#define PCI_DEVICE_ID_INTEL_ARROWLAKE_H_MEI1	0x7758 /* ARL-H tile HECI1 (D24:F0) — Doc 842704 */
+#define PCI_DEVICE_ID_INTEL_ARROWLAKE_H_MEI2	0x7759 /* ARL-H tile HECI2 (D24:F1) — Doc 842704 */
+#define PCI_DEVICE_ID_INTEL_ARROWLAKE_H_MEI3	0x775a /* ARL-H tile HECI3 (D24:F2) — Doc 842704 */
+#define PCI_DEVICE_ID_INTEL_ARROWLAKE_S_MEI1	0xae70 /* ARL-S HECI1 — coreboot */
+#define PCI_DEVICE_ID_INTEL_ARROWLAKE_S_MEI2	0xae71 /* ARL-S HECI2 — coreboot */
+/*
+ * Lunar Lake (LNL, 16th gen) MEI device IDs.
+ * Source: coreboot include/device/pci_ids.h (no LNL PCH datasheet available)
+ */
+#define PCI_DEVICE_ID_INTEL_LUNARLAKE_MEI1	0xa870 /* LNL HECI1 — coreboot */
+/*
+ * Panther Lake (PTL, Series 3) MEI device IDs.
+ * Doc 872188 (Intel Core Ultra Series 3 DS, Rev 001, January 2026)
+ * Two SKU variants with different device IDs, both at D19:F0-F2.
+ * PTL-404/H12Xe = lower-power/thin variant; PTL-H484 = H-series high-perf variant.
+ * WARNING: HAP/CSME strap location unknown — no PTL Vol2 or register map analysed.
+ * Do not use in me_cleaner or ifdtool until HAP offset is confirmed.
+ */
+#define PCI_DEVICE_ID_INTEL_PANTHERLAKE_MEI1		0xe362 /* PTL-404/H12Xe HECI1 (D19:F0) — Doc 872188 */
+#define PCI_DEVICE_ID_INTEL_PANTHERLAKE_MEI2		0xe363 /* PTL-404/H12Xe HECI2 (D19:F1) — Doc 872188 */
+#define PCI_DEVICE_ID_INTEL_PANTHERLAKE_MEI3		0xe364 /* PTL-404/H12Xe HECI3 (D19:F2) — Doc 872188 */
+#define PCI_DEVICE_ID_INTEL_PANTHERLAKE_H_MEI1		0xe462 /* PTL-H484 HECI1 (D19:F0) — Doc 872188 */
+#define PCI_DEVICE_ID_INTEL_PANTHERLAKE_H_MEI2		0xe463 /* PTL-H484 HECI2 (D19:F1) — Doc 872188 */
+#define PCI_DEVICE_ID_INTEL_PANTHERLAKE_H_MEI3		0xe464 /* PTL-H484 HECI3 (D19:F2) — Doc 872188 */
+
+#define PCI_DEV_HAS_SUPPORTED_ME(x) ( \
+	((x) ==  PCI_DEVICE_ID_INTEL_COUGARPOINT_1) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_PATSBURG_1) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_PANTHERPOINT_1) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_PANTHERPOINT_2) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_PANTHERPOINT_3) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_CAVECREEK) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_BEARLAKE_1) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_BEARLAKE_2) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_BEARLAKE_3) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_BEARLAKE_4) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_BEARLAKE_5) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_82946GZ) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_82G35) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_82Q963) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_82P965) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_82Q35) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_82G33) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_82Q33) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_82X38) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_3200) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_PM965) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_GME965) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_CANTIGA_1) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_CANTIGA_2) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_CANTIGA_3) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_CANTIGA_4) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_CANTIGA_5) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_EAGLELAKE_1) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_EAGLELAKE_2) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_EAGLELAKE_3) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_EAGLELAKE_4) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_CALPELLA_1) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_CALPELLA_2) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_LYNXPOINT_1) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_LYNXPOINT_2) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_LYNXPOINT_3) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_LYNXPOINT_4) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_WILDCAT_1) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_WILDCAT_2) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_SUNRISE_LP) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_CANNONPOINT_LP) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_CANNONPOINT_LP_ME2) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_COMETPOINT_LP) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_SUNRISE_H1_ME) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_SUNRISE_H2_ME) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_SUNRISE_H3_ME) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_LEWISBURG_CSME1) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_LEWISBURG_CSME2) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_LEWISBURG_CSME3) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_LEWISBURG_IE1) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_LEWISBURG_IE2) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_LEWISBURG_IE3) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_CANNONLAKE) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_BAYTRAIL) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_UNIONPOINT_MEI1) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_UNIONPOINT_MEI2) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_UNIONPOINT_MEI3) || \
+	/* Ice Lake — added, completely absent from upstream */ \
+	((x) ==  PCI_DEVICE_ID_INTEL_ICELAKE_LP_MEI1) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_ICELAKE_LP_MEI2) || \
+	/* Comet Lake additional SKUs — upstream only had CML-U MEI1 */ \
+	((x) ==  PCI_DEVICE_ID_INTEL_COMETLAKE_U_MEI2) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_COMETLAKE_H_MEI1) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_COMETLAKE_H_MEI2) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_COMETLAKE_S_MEI1) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_COMETLAKE_S_MEI2) || \
+	/* Tiger Lake (TGL, 11th gen) — added */ \
+	((x) ==  PCI_DEVICE_ID_INTEL_TIGERLAKE_LP_MEI1) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_TIGERLAKE_LP_MEI2) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_TIGERLAKE_H_MEI1) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_TIGERLAKE_H_MEI2) || \
+	/* Alder Lake (ADL, 12th gen) — HECI IDs corrected: 0x7AE8/9 not 0x7AEA (datasheet+coreboot) */ \
+	((x) ==  PCI_DEVICE_ID_INTEL_ALDERLAKE_S_MEI1) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_ALDERLAKE_S_MEI2) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_ALDERLAKE_P_MEI1) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_ALDERLAKE_P_MEI2) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_ALDERLAKE_N_MEI1) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_ALDERLAKE_N_MEI2) || \
+	/* Raptor Lake (RPL, 13th gen) — HECI IDs corrected: 0x7A68/9 not 0x7A60 (datasheet+coreboot) */ \
+	((x) ==  PCI_DEVICE_ID_INTEL_RAPTERLAKE_S_MEI1) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_RAPTERLAKE_S_MEI2) || \
+	/* RPL-P MEI1 shares PCI_DEVICE_ID_INTEL_ALDERLAKE_P_MEI1 (0x51e0) */ \
+	/* Meteor Lake (MTL, 14th gen) — WARNING: HAP path unconfirmed, descriptor layout changed */ \
+	((x) ==  PCI_DEVICE_ID_INTEL_METEORLAKE_P_MEI1) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_METEORLAKE_P_MEI2) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_METEORLAKE_P_MEI3) || \
+	/* Arrow Lake H/U (ARL, 15th gen) — datasheet confirmed Doc 842704 */ \
+	((x) ==  PCI_DEVICE_ID_INTEL_ARROWLAKE_MEI1) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_ARROWLAKE_MEI2) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_ARROWLAKE_MEI3) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_ARROWLAKE_MEI4) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_ARROWLAKE_H_MEI1) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_ARROWLAKE_H_MEI2) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_ARROWLAKE_H_MEI3) || \
+	/* Arrow Lake S (ARL-S) — coreboot only, no PCH datasheet */ \
+	((x) ==  PCI_DEVICE_ID_INTEL_ARROWLAKE_S_MEI1) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_ARROWLAKE_S_MEI2) || \
+	/* Lunar Lake (LNL, 16th gen) — coreboot only, no datasheet */ \
+	((x) ==  PCI_DEVICE_ID_INTEL_LUNARLAKE_MEI1) || \
+	/* Panther Lake (PTL, Series 3) — datasheet confirmed Doc 872188, HAP path unknown */ \
+	((x) ==  PCI_DEVICE_ID_INTEL_PANTHERLAKE_MEI1) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_PANTHERLAKE_MEI2) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_PANTHERLAKE_MEI3) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_PANTHERLAKE_H_MEI1) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_PANTHERLAKE_H_MEI2) || \
+	((x) ==  PCI_DEVICE_ID_INTEL_PANTHERLAKE_H_MEI3) || \
+	0)
