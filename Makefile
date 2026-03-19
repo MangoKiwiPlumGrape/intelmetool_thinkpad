@@ -2,12 +2,17 @@
 
 PROGRAM = intelmetool
 
-TOP_UNUSED := 
 CC      ?= gcc
 INSTALL ?= /usr/bin/env install
 PREFIX  ?= /usr/local
+
+# Vendored commonlib headers — same structure as coreboot src/commonlib/bsd/include
+# When building inside coreboot tree, coreboot sets this via $(top)/src/commonlib/bsd/include
+# For standalone builds we vendor the required headers in commonlib/bsd/include/
+COMMONLIB_INC := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))commonlib/bsd/include
+
 CFLAGS  ?= -O0 -g -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare -Wno-unused-function \
-           -I /home/util/Documents/intelmetool_thinkpad-main/commonlib/bsd/include
+           -I $(COMMONLIB_INC)
 LDFLAGS += -lpci -lz
 
 OBJS = intelmetool.o me.o me_status.o mmap.o rcba.o msr.o
