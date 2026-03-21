@@ -1,4 +1,5 @@
 # intelmetool-thinkpad — Platform Support Fix (8th–18th gen Intel)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MangoKiwiPlumGrape/intelmetool_thinkpad)
 
 Fork of [coreboot's intelmetool](https://github.com/coreboot/coreboot/tree/main/util/intelmetool) with missing PCI device ID support for 8th gen through Panther Lake Intel platforms.
 
