@@ -137,6 +137,35 @@ void intel_me_status(uint32_t hfs, uint32_t gmes)
 		((hfs & 0x200) >> 9) ? "YES" : "NO");
 	printf("ME: Manufacturing Mode      : %s\n",
 		((hfs & 0x10) >> 4) ? "YES" : "NO");
+	/* Distinguish genuine manufacturing mode from strip-induced mfg_mode.
+	 * When me_cleaner -S strips ME modules, ME boots incomplete and sets
+	 * mfg_mode=1 as a self-diagnostic flag — this is NOT real mfg mode.
+	 * Real mfg mode:    fpt_bad=0, operation_mode=0x0, fw_init_complete=1
+	 * Strip-induced:    fpt_bad=1 OR operation_mode!=0 (ME disabled/stripped)
+	 * Source: coreboot intelmetool me_status.c analysis + HFSTS1 register spec
+	 */
+	if ((hfs & 0x10) >> 4) {
+		uint32_t fpt_bad          = (hfs & 0x20) >> 5;
+		uint32_t operation_mode   = (hfs & 0xf0000) >> 16;
+		uint32_t fw_init_complete = (hfs & 0x200) >> 9;
+		if (fpt_bad == 1 || operation_mode != 0) {
+			printf("ME: Manufacturing Mode Type  :"
+			       " Strip-induced (ME disabled/stripped"
+			       " — not genuine manufacturing mode)\n");
+		} else if (fpt_bad == 0 && operation_mode == 0
+			   && fw_init_complete == 1) {
+			printf("ME: Manufacturing Mode Type  :"
+			       " *** GENUINE *** — elevated ME capabilities active\n");
+			printf("    WARNING: Real manufacturing mode detected!"
+			       " ME firmware updates may proceed unauthenticated.\n");
+			printf("    If this machine is not in a factory/repair"
+			       " context, investigate immediately.\n");
+		} else {
+			printf("ME: Manufacturing Mode Type  :"
+			       " Indeterminate — check FW Partition Table"
+			       " and Operation Mode above\n");
+		}
+	}
 	printf("ME: Boot Options Present    : %s\n",
 		((hfs & 0x1000000) >> 24) ? "YES" : "NO");
 	printf("ME: Update In Progress      : %s\n",
